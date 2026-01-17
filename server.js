@@ -4,6 +4,20 @@ const { Server } = require('socket.io');
 
 const app = express();
 const httpServer = createServer(app);
+
+// 健康检查路由（用于验证服务器是否运行）
+app.get('/', (req, res) => {
+  res.send('WebSocket server is running');
+});
+
+app.get('/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    rooms: rooms.size,
+    timestamp: new Date().toISOString()
+  });
+});
+
 const io = new Server(httpServer, {
   cors: {
     origin: "*",
