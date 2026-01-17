@@ -1,12 +1,14 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Volume2, VolumeX } from 'lucide-react';
 import MultiplayerMenu from './MultiplayerMenu';
+import OnlineMenu from './OnlineMenu';
 import networkManager from '../utils/NetworkManager';
+import p2pManager from '../utils/P2PManager';
 
 // Types
 type Point = { x: number; y: number };
-type GameState = 'menu' | 'playing' | 'win' | 'lose' | 'multiplayer';
-type GameMode = 'local' | 'online';
+type GameState = 'menu' | 'playing' | 'win' | 'lose' | 'multiplayer' | 'online-p2p';
+type GameMode = 'local' | 'online' | 'p2p';
 type Difficulty = 'novice' | 'duelist' | 'grandmaster' | 'inferno';
 type PlayerStyle = 'heavy' | 'light'; 
 
@@ -286,7 +288,7 @@ const FencingGame = () => {
 
   // 获取敌人位置（根据游戏模式）
   const getEnemyPos = () => {
-    if (gameMode === 'online') {
+    if (gameMode === 'online' || gameMode === 'p2p') {
       return opponentPos.current;
     }
     return aiPos.current;
@@ -596,14 +598,15 @@ const FencingGame = () => {
     updatePhysics(playerPos.current, playerVel.current, playerTrail.current, playerDt);
 
     // 联机模式下使用网络对手位置，单机模式使用 AI 位置
-    if (gameMode === 'online') {
+    if (gameMode === 'online' || gameMode === 'p2p') {
       // 在联机模式下，我们需要根据角色决定哪个是玩家位置
       const myPos = isHost ? playerPos.current : opponentPos.current;
       const enemyPos = isHost ? opponentPos.current : playerPos.current;
 
       // 同步自己的位置给对手 (节流，每 50ms 一次)
       if (now - lastSyncTime.current > 50) {
-        networkManager.syncMove(playerPos.current, playerVel.current);
+        const manager = gameMode === 'p2p' ? p2pManager : networkManager;
+        manager.syncMove(playerPos.current, playerVel.current);
         lastSyncTime.current = now;
       }
 
@@ -1278,7 +1281,7 @@ const FencingGame = () => {
 
   // 网络同步 useEffect
   useEffect(() => {
-    if (gameMode !== 'online') return;
+    if (gameMode !== 'online' && gameMode !== 'p2p') return;
 
     // 监听对手移动
     const handleOpponentMove = (data: any) => {
@@ -1304,16 +1307,19 @@ const FencingGame = () => {
       performWall(who, data.target);
     };
 
-    networkManager.on('opponent-move', handleOpponentMove);
-    networkManager.on('opponent-attack', handleOpponentAttack);
-    networkManager.on('opponent-dash', handleOpponentDash);
-    networkManager.on('opponent-wall', handleOpponentWall);
+    // 根据游戏模式选择网络管理器
+    const manager = gameMode === 'p2p' ? p2pManager : networkManager;
+
+    manager.on('opponent-move', handleOpponentMove);
+    manager.on('opponent-attack', handleOpponentAttack);
+    manager.on('opponent-dash', handleOpponentDash);
+    manager.on('opponent-wall', handleOpponentWall);
 
     return () => {
-      networkManager.off('opponent-move', handleOpponentMove);
-      networkManager.off('opponent-attack', handleOpponentAttack);
-      networkManager.off('opponent-dash', handleOpponentDash);
-      networkManager.off('opponent-wall', handleOpponentWall);
+      manager.off('opponent-move', handleOpponentMove);
+      manager.off('opponent-attack', handleOpponentAttack);
+      manager.off('opponent-dash', handleOpponentDash);
+      manager.off('opponent-wall', handleOpponentWall);
     };
   }, [gameMode, isHost]);
 
@@ -1365,36 +1371,38 @@ const FencingGame = () => {
     };
     const handleDown = (e: MouseEvent) => {
         if (!roundActive.current || gameState !== 'playing') return;
+        const manager = gameMode === 'p2p' ? p2pManager : networkManager;
         if (e.button === 0) {
             performAttack('player', 'thrust', mousePos.current);
-            if (gameMode === 'online') {
-                networkManager.syncAttack({ attackType: 'thrust', target: mousePos.current });
+            if (gameMode === 'online' || gameMode === 'p2p') {
+                manager.syncAttack({ attackType: 'thrust', target: mousePos.current });
             }
         }
         if (e.button === 2) {
             performAttack('player', 'slash', mousePos.current);
-            if (gameMode === 'online') {
-                networkManager.syncAttack({ attackType: 'slash', target: mousePos.current });
+            if (gameMode === 'online' || gameMode === 'p2p') {
+                manager.syncAttack({ attackType: 'slash', target: mousePos.current });
             }
         }
     };
     const handleKey = (e: KeyboardEvent, down: boolean) => {
         const k = e.key.toLowerCase();
         keys.current[k] = down;
-        
+        const manager = gameMode === 'p2p' ? p2pManager : networkManager;
+
         if (down && k === ' ') {
             e.preventDefault();
             const ax = (keys.current['d'] ? 1 : 0) - (keys.current['a'] ? 1 : 0);
             const ay = (keys.current['s'] ? 1 : 0) - (keys.current['w'] ? 1 : 0);
             performDash('player', {x: ax, y: ay});
-            if (gameMode === 'online') {
-                networkManager.syncDash({x: ax, y: ay});
+            if (gameMode === 'online' || gameMode === 'p2p') {
+                manager.syncDash({x: ax, y: ay});
             }
         }
         if (down && k === 'q') {
             performWall('player', mousePos.current);
-            if (gameMode === 'online') {
-                networkManager.syncWall(mousePos.current);
+            if (gameMode === 'online' || gameMode === 'p2p') {
+                manager.syncWall(mousePos.current);
             }
         }
         if (down && k === 'e') {
@@ -1496,6 +1504,17 @@ const FencingGame = () => {
             <canvas ref={canvasRef} width={1200} height={800} className="block cursor-crosshair" />
 
             {/* Menus (Overlay inside scaled container) */}
+            {gameState === 'online-p2p' && (
+                <OnlineMenu
+                    isDarkTheme={isDarkTheme}
+                    onBack={() => setGameState('menu')}
+                    onGameStart={(mode) => {
+                        setGameMode('p2p');
+                        setIsHost(mode === 'host');
+                        startGame('duelist'); // P2P 默认难度
+                    }}
+                />
+            )}
             {gameState === 'multiplayer' && (
                 <MultiplayerMenu
                     isDarkTheme={isDarkTheme}
@@ -1507,7 +1526,7 @@ const FencingGame = () => {
                     }}
                 />
             )}
-            {gameState !== 'playing' && gameState !== 'multiplayer' && (
+            {gameState !== 'playing' && gameState !== 'multiplayer' && gameState !== 'online-p2p' && (
                 <div className={`absolute inset-0 flex items-center justify-center z-20 transition-colors duration-1000 ${isDarkTheme ? 'bg-[#0c0a09]/90' : 'bg-[#fafaf9]/90'}`}>
                     <div className={`text-center p-12 border min-w-[500px] transition-colors duration-1000 ${isDarkTheme ? 'border-stone-800' : 'border-stone-300'}`}>
                         {gameState === 'menu' && (
@@ -1534,6 +1553,16 @@ const FencingGame = () => {
                                 </div>
 
                                 <div className="space-y-3 flex flex-col items-center">
+                                    <button
+                                        onClick={() => setGameState('online-p2p')}
+                                        className={`w-48 py-2 text-sm border transition-all duration-500 ${
+                                            isDarkTheme
+                                            ? 'border-emerald-800 text-emerald-400 hover:text-emerald-100 hover:border-emerald-500'
+                                            : 'border-emerald-300 text-emerald-600 hover:text-emerald-900 hover:border-emerald-500'
+                                        }`}
+                                    >
+                                        在线对战
+                                    </button>
                                     <button
                                         onClick={() => setGameState('multiplayer')}
                                         className={`w-48 py-2 text-sm border transition-all duration-500 ${
