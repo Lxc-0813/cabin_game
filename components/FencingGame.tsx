@@ -1,9 +1,12 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Volume2, VolumeX } from 'lucide-react';
+import MultiplayerMenu from './MultiplayerMenu';
+import networkManager from '../utils/NetworkManager';
 
 // Types
 type Point = { x: number; y: number };
-type GameState = 'menu' | 'playing' | 'win' | 'lose';
+type GameState = 'menu' | 'playing' | 'win' | 'lose' | 'multiplayer';
+type GameMode = 'local' | 'online';
 type Difficulty = 'novice' | 'duelist' | 'grandmaster' | 'inferno';
 type PlayerStyle = 'heavy' | 'light'; 
 
@@ -191,12 +194,14 @@ const FencingGame = () => {
 
   // --- State ---
   const [gameState, setGameState] = useState<GameState>('menu');
+  const [gameMode, setGameMode] = useState<GameMode>('local');
   const [difficulty, setDifficulty] = useState<Difficulty>('duelist');
   const [playerStyle, setPlayerStyle] = useState<PlayerStyle>('heavy');
   const [score, setScore] = useState({ player: 0, ai: 0 });
   const [muted, setMuted] = useState(false);
   const [focusMode, setFocusMode] = useState(false); // React state for UI syncing
   const [scale, setScale] = useState(1);
+  const [isHost, setIsHost] = useState(false); // 是否是房主
 
   // Theme State derived from Difficulty
   const isDarkTheme = difficulty === 'inferno';
@@ -270,9 +275,22 @@ const FencingGame = () => {
   const slowMoFactor = useRef(1.0);
   const roundActive = useRef(false);
 
+  // 联机模式对手数据
+  const opponentPos = useRef<Point>({ x: 900, y: 400 });
+  const opponentVel = useRef<Point>({ x: 0, y: 0 });
+  const lastSyncTime = useRef(0);
+
   // --- Utilities ---
   const getDist = (a: Point, b: Point) => Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2);
   const getAngle = (a: Point, b: Point) => Math.atan2(b.y - a.y, b.x - a.x);
+
+  // 获取敌人位置（根据游戏模式）
+  const getEnemyPos = () => {
+    if (gameMode === 'online') {
+      return opponentPos.current;
+    }
+    return aiPos.current;
+  };
   
   const getIntersection = (p0: Point, p1: Point, p2: Point, p3: Point): Point | null => {
     const s1_x = p1.x - p0.x; const s1_y = p1.y - p0.y;
@@ -520,11 +538,12 @@ const FencingGame = () => {
     }
     
     // --- Camera Logic ---
+    const enemyPos = getEnemyPos();
     const midpoint = {
-        x: (playerPos.current.x + aiPos.current.x) / 2,
-        y: (playerPos.current.y + aiPos.current.y) / 2
+        x: (playerPos.current.x + enemyPos.x) / 2,
+        y: (playerPos.current.y + enemyPos.y) / 2
     };
-    const dist = getDist(playerPos.current, aiPos.current);
+    const dist = getDist(playerPos.current, enemyPos);
     const targetZoom = Math.max(0.7, Math.min(1.3, 1.0 + (600 - dist) * 0.0005));
     const lerp = 0.05;
     camera.current.x += (midpoint.x - camera.current.x) * lerp;
@@ -575,7 +594,24 @@ const FencingGame = () => {
     };
 
     updatePhysics(playerPos.current, playerVel.current, playerTrail.current, playerDt);
-    updatePhysics(aiPos.current, aiVel.current, aiTrail.current, globalDt);
+
+    // 联机模式下使用网络对手位置，单机模式使用 AI 位置
+    if (gameMode === 'online') {
+      // 在联机模式下，我们需要根据角色决定哪个是玩家位置
+      const myPos = isHost ? playerPos.current : opponentPos.current;
+      const enemyPos = isHost ? opponentPos.current : playerPos.current;
+
+      // 同步自己的位置给对手 (节流，每 50ms 一次)
+      if (now - lastSyncTime.current > 50) {
+        networkManager.syncMove(playerPos.current, playerVel.current);
+        lastSyncTime.current = now;
+      }
+
+      // 在联机模式下，对手位置由网络同步决定，不需要物理更新
+      // 只有房主控制 player1（左侧），客人控制 player2（右侧）
+    } else {
+      updatePhysics(aiPos.current, aiVel.current, aiTrail.current, globalDt);
+    }
 
     // --- Ghost Spawning Logic ---
     [playerPos.current, aiPos.current].forEach((pos, idx) => {
@@ -755,7 +791,8 @@ const FencingGame = () => {
     });
 
     // 6. AI Logic (Overhauled V6 - "Inferno")
-    if (roundActive.current) {
+    // 在联机模式下跳过 AI 逻辑
+    if (roundActive.current && gameMode === 'local') {
         const dist = getDist(aiPos.current, playerPos.current);
         const angleToPlayer = getAngle(aiPos.current, playerPos.current);
         
@@ -1009,7 +1046,8 @@ const FencingGame = () => {
         }
     };
 
-    drawChar(aiPos.current, theme.p2, aiStamina.current, false);
+    const enemyPos = getEnemyPos();
+    drawChar(enemyPos, theme.p2, aiStamina.current, false);
     drawChar(playerPos.current, theme.p1, playerStamina.current, true);
 
     // Blades
@@ -1238,6 +1276,47 @@ const FencingGame = () => {
       if (SoundSys.ctx && SoundSys.ctx.state === 'suspended') SoundSys.ctx.resume();
   }
 
+  // 网络同步 useEffect
+  useEffect(() => {
+    if (gameMode !== 'online') return;
+
+    // 监听对手移动
+    const handleOpponentMove = (data: any) => {
+      opponentPos.current = data.position;
+      opponentVel.current = data.velocity;
+    };
+
+    // 监听对手攻击
+    const handleOpponentAttack = (data: any) => {
+      const who: 'player' | 'ai' = isHost ? 'ai' : 'player';
+      performAttack(who, data.attackType, data.target);
+    };
+
+    // 监听对手冲刺
+    const handleOpponentDash = (data: any) => {
+      const who: 'player' | 'ai' = isHost ? 'ai' : 'player';
+      performDash(who, data.moveVec);
+    };
+
+    // 监听对手墙壁
+    const handleOpponentWall = (data: any) => {
+      const who: 'player' | 'ai' = isHost ? 'ai' : 'player';
+      performWall(who, data.target);
+    };
+
+    networkManager.on('opponent-move', handleOpponentMove);
+    networkManager.on('opponent-attack', handleOpponentAttack);
+    networkManager.on('opponent-dash', handleOpponentDash);
+    networkManager.on('opponent-wall', handleOpponentWall);
+
+    return () => {
+      networkManager.off('opponent-move', handleOpponentMove);
+      networkManager.off('opponent-attack', handleOpponentAttack);
+      networkManager.off('opponent-dash', handleOpponentDash);
+      networkManager.off('opponent-wall', handleOpponentWall);
+    };
+  }, [gameMode, isHost]);
+
   // Handle Resize for Scale
   useEffect(() => {
     const handleResize = () => {
@@ -1286,21 +1365,37 @@ const FencingGame = () => {
     };
     const handleDown = (e: MouseEvent) => {
         if (!roundActive.current || gameState !== 'playing') return;
-        if (e.button === 0) performAttack('player', 'thrust', mousePos.current);
-        if (e.button === 2) performAttack('player', 'slash', mousePos.current);
+        if (e.button === 0) {
+            performAttack('player', 'thrust', mousePos.current);
+            if (gameMode === 'online') {
+                networkManager.syncAttack({ attackType: 'thrust', target: mousePos.current });
+            }
+        }
+        if (e.button === 2) {
+            performAttack('player', 'slash', mousePos.current);
+            if (gameMode === 'online') {
+                networkManager.syncAttack({ attackType: 'slash', target: mousePos.current });
+            }
+        }
     };
     const handleKey = (e: KeyboardEvent, down: boolean) => {
         const k = e.key.toLowerCase();
         keys.current[k] = down;
         
         if (down && k === ' ') {
-            e.preventDefault(); 
+            e.preventDefault();
             const ax = (keys.current['d'] ? 1 : 0) - (keys.current['a'] ? 1 : 0);
             const ay = (keys.current['s'] ? 1 : 0) - (keys.current['w'] ? 1 : 0);
             performDash('player', {x: ax, y: ay});
+            if (gameMode === 'online') {
+                networkManager.syncDash({x: ax, y: ay});
+            }
         }
         if (down && k === 'q') {
             performWall('player', mousePos.current);
+            if (gameMode === 'online') {
+                networkManager.syncWall(mousePos.current);
+            }
         }
         if (down && k === 'e') {
             if (playerStyle !== 'light' && playerFocus.current >= 100 && !focusActive.current) {
@@ -1401,7 +1496,18 @@ const FencingGame = () => {
             <canvas ref={canvasRef} width={1200} height={800} className="block cursor-crosshair" />
 
             {/* Menus (Overlay inside scaled container) */}
-            {gameState !== 'playing' && (
+            {gameState === 'multiplayer' && (
+                <MultiplayerMenu
+                    isDarkTheme={isDarkTheme}
+                    onBack={() => setGameState('menu')}
+                    onGameStart={(mode) => {
+                        setGameMode('online');
+                        setIsHost(mode === 'host');
+                        startGame('duelist'); // 联机默认难度
+                    }}
+                />
+            )}
+            {gameState !== 'playing' && gameState !== 'multiplayer' && (
                 <div className={`absolute inset-0 flex items-center justify-center z-20 transition-colors duration-1000 ${isDarkTheme ? 'bg-[#0c0a09]/90' : 'bg-[#fafaf9]/90'}`}>
                     <div className={`text-center p-12 border min-w-[500px] transition-colors duration-1000 ${isDarkTheme ? 'border-stone-800' : 'border-stone-300'}`}>
                         {gameState === 'menu' && (
@@ -1428,12 +1534,22 @@ const FencingGame = () => {
                                 </div>
 
                                 <div className="space-y-3 flex flex-col items-center">
-                                    <button 
-                                        disabled={playerStyle === 'light'}
-                                        onClick={() => startGame('novice')} 
+                                    <button
+                                        onClick={() => setGameState('multiplayer')}
                                         className={`w-48 py-2 text-sm border transition-all duration-500 ${
-                                            playerStyle === 'light' 
-                                            ? (isDarkTheme ? 'text-stone-800 border-stone-900' : 'text-stone-200 border-stone-100') 
+                                            isDarkTheme
+                                            ? 'border-cyan-800 text-cyan-400 hover:text-cyan-100 hover:border-cyan-500'
+                                            : 'border-sky-300 text-sky-600 hover:text-sky-900 hover:border-sky-500'
+                                        }`}
+                                    >
+                                        局域网对战
+                                    </button>
+                                    <button
+                                        disabled={playerStyle === 'light'}
+                                        onClick={() => startGame('novice')}
+                                        className={`w-48 py-2 text-sm border transition-all duration-500 ${
+                                            playerStyle === 'light'
+                                            ? (isDarkTheme ? 'text-stone-800 border-stone-900' : 'text-stone-200 border-stone-100')
                                             : (isDarkTheme ? 'text-stone-400 border-stone-800 hover:text-stone-100 hover:border-stone-500' : 'text-stone-500 border-stone-300 hover:text-stone-900 hover:border-stone-500')
                                         }`}
                                     >
