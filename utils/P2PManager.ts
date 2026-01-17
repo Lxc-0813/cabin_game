@@ -47,27 +47,38 @@ class P2PManager {
           }
         });
 
+        let resolved = false;
+
         this.peer.on('open', (id) => {
           this.peerId = id;
           this.role = 'host';
           console.log('房间创建成功，ID:', id);
 
+          // 立即返回成功，不等待玩家加入
+          if (!resolved) {
+            resolved = true;
+            resolve({ success: true, roomId: id });
+          }
+
           // 监听连接
           this.peer!.on('connection', (conn) => {
             this.handleConnection(conn);
-            resolve({ success: true, roomId: id });
           });
         });
 
         this.peer.on('error', (err) => {
           console.error('Peer 错误:', err);
-          resolve({ success: false, message: `连接失败: ${err.message}` });
+          if (!resolved) {
+            resolved = true;
+            resolve({ success: false, message: `连接失败: ${err.message}` });
+          }
         });
 
         // 超时处理
         setTimeout(() => {
-          if (!this.peerId) {
-            resolve({ success: false, message: '创建房间超时' });
+          if (!resolved) {
+            resolved = true;
+            resolve({ success: false, message: '创建房间超时，请检查网络连接' });
           }
         }, 10000);
       } catch (err: any) {
@@ -90,6 +101,8 @@ class P2PManager {
           }
         });
 
+        let resolved = false;
+
         this.peer.on('open', (id) => {
           this.peerId = id;
           this.role = 'guest';
@@ -104,17 +117,24 @@ class P2PManager {
 
           conn.on('open', () => {
             console.log('成功连接到房间');
-            resolve({ success: true });
+            if (!resolved) {
+              resolved = true;
+              resolve({ success: true });
+            }
           });
 
           conn.on('error', (err) => {
             console.error('连接错误:', err);
-            resolve({ success: false, message: `连接失败: ${err}` });
+            if (!resolved) {
+              resolved = true;
+              resolve({ success: false, message: `连接失败: ${err}` });
+            }
           });
 
           // 超时处理
           setTimeout(() => {
-            if (!this.isConnected) {
+            if (!resolved) {
+              resolved = true;
               resolve({ success: false, message: '连接超时，请检查房间ID是否正确' });
             }
           }, 10000);
@@ -122,7 +142,10 @@ class P2PManager {
 
         this.peer.on('error', (err) => {
           console.error('Peer 错误:', err);
-          resolve({ success: false, message: `连接失败: ${err.message}` });
+          if (!resolved) {
+            resolved = true;
+            resolve({ success: false, message: `连接失败: ${err.message}` });
+          }
         });
       } catch (err: any) {
         resolve({ success: false, message: `加入失败: ${err.message}` });
