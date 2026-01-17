@@ -37,14 +37,28 @@ class P2PManager {
   async createRoom(): Promise<{ success: boolean; roomId?: string; message?: string }> {
     return new Promise((resolve) => {
       try {
-        // 使用免费的 PeerJS 云服务器
+        console.log('开始创建 Peer 连接...');
+
+        // 使用免费的 PeerJS 云服务器，配置多个备用 STUN 服务器
         this.peer = new Peer({
+          // 使用默认的免费 PeerJS 云服务器
+          host: '0.peerjs.com',
+          port: 443,
+          path: '/',
+          secure: true,
           config: {
             iceServers: [
+              // Google 公共 STUN 服务器
               { urls: 'stun:stun.l.google.com:19302' },
-              { urls: 'stun:global.stun.twilio.com:3478' }
+              { urls: 'stun:stun1.l.google.com:19302' },
+              { urls: 'stun:stun2.l.google.com:19302' },
+              // Twilio STUN 服务器
+              { urls: 'stun:global.stun.twilio.com:3478' },
+              // Mozilla STUN 服务器
+              { urls: 'stun:stun.services.mozilla.com' }
             ]
-          }
+          },
+          debug: 2 // 开启调试日志
         });
 
         let resolved = false;
@@ -68,19 +82,35 @@ class P2PManager {
 
         this.peer.on('error', (err) => {
           console.error('Peer 错误:', err);
+          console.error('错误类型:', err.type);
           if (!resolved) {
             resolved = true;
-            resolve({ success: false, message: `连接失败: ${err.message}` });
+            let errorMsg = `连接失败: ${err.message}`;
+
+            // 根据错误类型提供更友好的提示
+            if (err.type === 'network') {
+              errorMsg = '网络错误，无法连接到服务器。请检查网络连接或尝试刷新页面。';
+            } else if (err.type === 'server-error') {
+              errorMsg = '服务器错误，请稍后重试。';
+            } else if (err.type === 'unavailable-id') {
+              errorMsg = '房间 ID 已被占用，请刷新页面重试。';
+            }
+
+            resolve({ success: false, message: errorMsg });
           }
         });
 
-        // 超时处理
+        // 超时处理（增加到 15 秒，因为有时服务器响应较慢）
         setTimeout(() => {
           if (!resolved) {
             resolved = true;
-            resolve({ success: false, message: '创建房间超时，请检查网络连接' });
+            console.error('创建房间超时');
+            resolve({
+              success: false,
+              message: '连接超时。可能原因：\n1. 网络连接问题\n2. 防火墙阻止连接\n3. 请尝试刷新页面重试'
+            });
           }
-        }, 10000);
+        }, 15000);
       } catch (err: any) {
         resolve({ success: false, message: `创建失败: ${err.message}` });
       }
@@ -91,14 +121,24 @@ class P2PManager {
   async joinRoom(roomId: string): Promise<{ success: boolean; message?: string }> {
     return new Promise((resolve) => {
       try {
-        // 创建自己的 Peer
+        console.log('开始连接到房间:', roomId);
+
+        // 创建自己的 Peer，使用相同配置
         this.peer = new Peer({
+          host: '0.peerjs.com',
+          port: 443,
+          path: '/',
+          secure: true,
           config: {
             iceServers: [
               { urls: 'stun:stun.l.google.com:19302' },
-              { urls: 'stun:global.stun.twilio.com:3478' }
+              { urls: 'stun:stun1.l.google.com:19302' },
+              { urls: 'stun:stun2.l.google.com:19302' },
+              { urls: 'stun:global.stun.twilio.com:3478' },
+              { urls: 'stun:stun.services.mozilla.com' }
             ]
-          }
+          },
+          debug: 2
         });
 
         let resolved = false;
@@ -142,9 +182,20 @@ class P2PManager {
 
         this.peer.on('error', (err) => {
           console.error('Peer 错误:', err);
+          console.error('错误类型:', err.type);
           if (!resolved) {
             resolved = true;
-            resolve({ success: false, message: `连接失败: ${err.message}` });
+            let errorMsg = `连接失败: ${err.message}`;
+
+            if (err.type === 'network') {
+              errorMsg = '网络错误，请检查网络连接。';
+            } else if (err.type === 'peer-unavailable') {
+              errorMsg = '房间不存在或已关闭，请检查房间 ID。';
+            } else if (err.type === 'server-error') {
+              errorMsg = '服务器错误，请稍后重试。';
+            }
+
+            resolve({ success: false, message: errorMsg });
           }
         });
       } catch (err: any) {
