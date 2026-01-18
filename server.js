@@ -260,6 +260,19 @@ io.on('connection', (socket) => {
     }
   });
 
+  // 比分同步
+  socket.on('score-update', (data) => {
+    const { roomId, score } = data;
+    const room = rooms.get(roomId);
+
+    if (room) {
+      // 广播给房间内其他玩家（不包括发送者）
+      socket.to(roomId).emit('score-update', {
+        score
+      });
+    }
+  });
+
   // 离开房间
   socket.on('leave-room', (roomId) => {
     leaveRoom(socket, roomId);

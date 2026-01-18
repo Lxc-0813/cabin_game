@@ -1221,13 +1221,15 @@ const FencingGame = () => {
   const handleRoundEnd = (winner: 'player' | 'ai') => {
       if (!roundActive.current) return;
       roundActive.current = false;
-      focusActive.current = false; 
+      focusActive.current = false;
       setFocusMode(false);
-      
+
       shake.current = 25;
-      slowMoFactor.current = 0.05; 
-      
-      const victim = winner === 'player' ? aiPos.current : playerPos.current;
+      slowMoFactor.current = 0.05;
+
+      const victim = winner === 'player' ?
+          ((gameMode === 'online' || gameMode === 'p2p') ? opponentPos.current : aiPos.current) :
+          playerPos.current;
       for(let i=0; i<30; i++) {
         particles.current.push({
             x: victim.x, y: victim.y,
@@ -1237,9 +1239,25 @@ const FencingGame = () => {
       }
       combatTexts.current.push({ x: victim.x, y: victim.y - 40, text: "胜负已分", color: theme.text, life: 2 });
 
-      if (winner === 'player') scoreRef.current.player++;
-      else scoreRef.current.ai++;
-      setScore({...scoreRef.current});
+      // 联机模式下，只有房主更新比分并同步
+      if (gameMode === 'online' || gameMode === 'p2p') {
+          if (isHost) {
+              // 房主更新比分
+              if (winner === 'player') scoreRef.current.player++;
+              else scoreRef.current.ai++;
+              setScore({...scoreRef.current});
+
+              // 同步比分给客人
+              const manager = gameMode === 'p2p' ? p2pManager : networkManager;
+              manager.syncScore(scoreRef.current);
+          }
+          // 客人不更新比分，等待房主同步
+      } else {
+          // 单机模式，正常更新比分
+          if (winner === 'player') scoreRef.current.player++;
+          else scoreRef.current.ai++;
+          setScore({...scoreRef.current});
+      }
 
       const winScore = 5;
 
@@ -1250,29 +1268,46 @@ const FencingGame = () => {
               slowMoFactor.current = 1.0;
               return;
           }
-          // Reset positions and Round Hits
-          playerPos.current = { x: 300, y: 400 };
-          aiPos.current = { x: 900, y: 400 };
-          playerVel.current = {x:0,y:0};
-          aiVel.current = {x:0,y:0};
+
+          // Reset positions - 根据游戏模式重置位置
+          if (gameMode === 'online' || gameMode === 'p2p') {
+              if (isHost) {
+                  // 房主在左侧
+                  playerPos.current = { x: 300, y: 400 };
+                  opponentPos.current = { x: 900, y: 400 };
+              } else {
+                  // 客人在右侧
+                  playerPos.current = { x: 900, y: 400 };
+                  opponentPos.current = { x: 300, y: 400 };
+              }
+              playerVel.current = {x:0,y:0};
+              opponentVel.current = {x:0,y:0};
+          } else {
+              // 单机模式
+              playerPos.current = { x: 300, y: 400 };
+              aiPos.current = { x: 900, y: 400 };
+              playerVel.current = {x:0,y:0};
+              aiVel.current = {x:0,y:0};
+          }
+
           activeBlades.current = [];
           activeWalls.current = [];
           combatTexts.current = [];
           playerStamina.current = STAMINA_MAX;
           aiStamina.current = STAMINA_MAX;
           playerFocus.current = playerStyle === 'light' ? 0 : Math.min(FOCUS_MAX, playerFocus.current + 25);
-          
+
           // Reset Hit Counters for new round
           roundHits.current = { player: 0, ai: 0 };
-          
+
           roundActive.current = true;
           slowMoFactor.current = 1.0;
           playerInvulnUntil.current = 0;
           aiInvulnUntil.current = 0;
-          aiActionTimer.current = 0; 
-          
-          camera.current = { x: 600, y: 400, zoom: 1 }; 
-      }, 1000); 
+          aiActionTimer.current = 0;
+
+          camera.current = { x: 600, y: 400, zoom: 1 };
+      }, 1000);
   };
 
   const startGame = (diff: Difficulty) => {
@@ -1352,6 +1387,15 @@ const FencingGame = () => {
       performWall(who, data.target);
     };
 
+    // 监听比分更新（只有客人接收）
+    const handleScoreUpdate = (data: any) => {
+      if (!isHost) {
+        // 客人接收房主同步的比分
+        scoreRef.current = data.score;
+        setScore(data.score);
+      }
+    };
+
     // 根据游戏模式选择网络管理器
     const manager = gameMode === 'p2p' ? p2pManager : networkManager;
 
@@ -1359,12 +1403,14 @@ const FencingGame = () => {
     manager.on('opponent-attack', handleOpponentAttack);
     manager.on('opponent-dash', handleOpponentDash);
     manager.on('opponent-wall', handleOpponentWall);
+    manager.on('score-update', handleScoreUpdate);
 
     return () => {
       manager.off('opponent-move', handleOpponentMove);
       manager.off('opponent-attack', handleOpponentAttack);
       manager.off('opponent-dash', handleOpponentDash);
       manager.off('opponent-wall', handleOpponentWall);
+      manager.off('score-update', handleScoreUpdate);
     };
   }, [gameMode, isHost]);
 
