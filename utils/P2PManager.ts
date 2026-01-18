@@ -267,6 +267,9 @@ class P2PManager {
       case 'round-end':
         this.emit('round-ended', payload);
         break;
+      case 'score-update':
+        this.emit('score-update', payload);
+        break;
     }
   }
 
@@ -328,6 +331,11 @@ class P2PManager {
   // 同步回合结束
   syncRoundEnd(winner: string) {
     this.send('round-end', { winner });
+  }
+
+  // 同步比分
+  syncScore(score: { player: number; ai: number }) {
+    this.send('score-update', { score });
   }
 
   // 断开连接

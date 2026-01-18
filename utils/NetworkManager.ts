@@ -104,6 +104,10 @@ class NetworkManager {
     this.socket.on('round-ended', (data) => {
       this.emit('round-ended', data);
     });
+
+    this.socket.on('score-update', (data) => {
+      this.emit('score-update', data);
+    });
   }
 
   // 创建房间
@@ -223,6 +227,16 @@ class NetworkManager {
     this.socket.emit('hit', {
       roomId: this.roomId,
       victim
+    });
+  }
+
+  // 同步比分
+  syncScore(score: { player: number; ai: number }) {
+    if (!this.socket || !this.roomId) return;
+
+    this.socket.emit('score-update', {
+      roomId: this.roomId,
+      score
     });
   }
 
