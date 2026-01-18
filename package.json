@@ -11,6 +11,7 @@
     "dev:all": "concurrently \"npm run dev\" \"npm run server\""
   },
   "dependencies": {
+    "@tensorflow/tfjs": "^4.22.0",
     "express": "^5.2.1",
     "lucide-react": "^0.562.0",
     "peerjs": "^1.5.5",

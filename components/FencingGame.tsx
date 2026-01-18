@@ -1239,19 +1239,23 @@ const FencingGame = () => {
       }
       combatTexts.current.push({ x: victim.x, y: victim.y - 40, text: "胜负已分", color: theme.text, life: 2 });
 
-      // 联机模式下，只有房主更新比分并同步
+      // 联机模式下，根据角色正确更新比分
       if (gameMode === 'online' || gameMode === 'p2p') {
           if (isHost) {
-              // 房主更新比分
+              // 房主视角：winner='player' 表示房主赢
               if (winner === 'player') scoreRef.current.player++;
               else scoreRef.current.ai++;
-              setScore({...scoreRef.current});
-
-              // 同步比分给客人
-              const manager = gameMode === 'p2p' ? p2pManager : networkManager;
-              manager.syncScore(scoreRef.current);
+          } else {
+              // 客人视角：winner='player' 表示客人赢，winner='ai' 表示房主赢
+              // 需要反转逻辑
+              if (winner === 'player') scoreRef.current.ai++;    // 客人赢 → ai分数+1
+              else scoreRef.current.player++;                     // 房主赢 → player分数+1
           }
-          // 客人不更新比分，等待房主同步
+          setScore({...scoreRef.current});
+
+          // 同步比分给对方（双重保险）
+          const manager = gameMode === 'p2p' ? p2pManager : networkManager;
+          manager.syncScore(scoreRef.current);
       } else {
           // 单机模式，正常更新比分
           if (winner === 'player') scoreRef.current.player++;
