@@ -411,8 +411,11 @@ const FencingGame = () => {
   };
 
   const performAttack = (who: 'player' | 'ai', type: AttackType, target: Point) => {
-      const pos = who === 'player' ? playerPos.current : aiPos.current;
-      const vel = who === 'player' ? playerVel.current : aiVel.current;
+      // 在联机模式下，'ai' 实际上代表网络对手
+      const pos = who === 'player' ? playerPos.current :
+                  (gameMode === 'online' || gameMode === 'p2p') ? opponentPos.current : aiPos.current;
+      const vel = who === 'player' ? playerVel.current :
+                  (gameMode === 'online' || gameMode === 'p2p') ? opponentVel.current : aiVel.current;
       const stamina = who === 'player' ? playerStamina : aiStamina;
       const cooldown = who === 'player' ? playerCooldown : aiCooldown;
       const slashCombo = who === 'player' ? playerSlashCombo : aiSlashCombo;
@@ -780,15 +783,41 @@ const FencingGame = () => {
         });
 
         // B. BLADE vs BODY
-        if (!blade.active) return; 
-        const targetPos = blade.owner === 'player' ? aiPos.current : playerPos.current;
-        const targetInvuln = blade.owner === 'player' ? aiInvulnUntil.current : playerInvulnUntil.current;
-        if (now < targetInvuln) return; 
+        if (!blade.active) return;
+
+        // 在联机模式下，需要特殊处理位置引用
+        let targetPos: Point;
+        let targetInvuln: number;
+        let victim: 'player' | 'ai';
+        let attackerPos: Point;
+
+        if (gameMode === 'online' || gameMode === 'p2p') {
+            // 联机模式：blade.owner 是攻击者，目标是对手
+            if (blade.owner === 'player') {
+                // 玩家攻击，目标是对手
+                targetPos = opponentPos.current;
+                targetInvuln = aiInvulnUntil.current; // 借用 aiInvuln 存储对手的无敌时间
+                victim = 'ai'; // 标记为 ai，但实际上是网络对手
+                attackerPos = playerPos.current;
+            } else {
+                // 对手攻击，目标是玩家
+                targetPos = playerPos.current;
+                targetInvuln = playerInvulnUntil.current;
+                victim = 'player';
+                attackerPos = opponentPos.current;
+            }
+        } else {
+            // 单机模式：原有逻辑
+            targetPos = blade.owner === 'player' ? aiPos.current : playerPos.current;
+            targetInvuln = blade.owner === 'player' ? aiInvulnUntil.current : playerInvulnUntil.current;
+            victim = blade.owner === 'player' ? 'ai' : 'player';
+            attackerPos = blade.owner === 'player' ? playerPos.current : aiPos.current;
+        }
+
+        if (now < targetInvuln) return;
 
         if (distToSegment(targetPos, blade.p1, blade.p2) < PLAYER_RADIUS) {
             blade.active = false; // Disable blade on hit so it doesn't multi-hit
-            const victim = blade.owner === 'player' ? 'ai' : 'player';
-            const attackerPos = blade.owner === 'player' ? playerPos.current : aiPos.current;
             registerHit(victim, attackerPos);
         }
     });
@@ -1251,11 +1280,27 @@ const FencingGame = () => {
       scoreRef.current = { player: 0, ai: 0 };
       setScore({ player: 0, ai: 0 });
       setGameState('playing');
-      playerPos.current = { x: 300, y: 400 };
-      aiPos.current = { x: 900, y: 400 };
+
+      // 联机模式下根据是否是房主设置初始位置
+      if (gameMode === 'online' || gameMode === 'p2p') {
+          if (isHost) {
+              // 房主在左侧
+              playerPos.current = { x: 300, y: 400 };
+              opponentPos.current = { x: 900, y: 400 };
+          } else {
+              // 客人在右侧
+              playerPos.current = { x: 900, y: 400 };
+              opponentPos.current = { x: 300, y: 400 };
+          }
+      } else {
+          // 单机模式：玩家在左，AI在右
+          playerPos.current = { x: 300, y: 400 };
+          aiPos.current = { x: 900, y: 400 };
+      }
+
       roundActive.current = true;
       slowMoFactor.current = 1.0;
-      
+
       // Enforce style restriction
       let startStyle = playerStyle;
       if ((diff === 'novice' || diff === 'duelist') && playerStyle === 'light') {
@@ -1263,11 +1308,11 @@ const FencingGame = () => {
           setPlayerStyle('heavy');
       }
 
-      playerFocus.current = startStyle === 'light' ? 0 : 50; 
+      playerFocus.current = startStyle === 'light' ? 0 : 50;
       focusActive.current = false;
       setFocusMode(false);
       roundHits.current = { player: 0, ai: 0 };
-      
+
       // Init Audio
       SoundSys.init();
       SoundSys.sfx.start();
