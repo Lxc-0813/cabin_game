@@ -1263,7 +1263,22 @@ const FencingGame = () => {
 
       setTimeout(() => {
           if (scoreRef.current.player >= winScore || scoreRef.current.ai >= winScore) {
-              setGameState(scoreRef.current.player >= winScore ? 'win' : 'lose');
+              // 根据游戏模式和角色判定胜负
+              let isWin: boolean;
+              if (gameMode === 'online' || gameMode === 'p2p') {
+                  if (isHost) {
+                      // 房主：score.player 是自己的分数
+                      isWin = scoreRef.current.player >= winScore;
+                  } else {
+                      // 客人：score.ai 是自己的分数
+                      isWin = scoreRef.current.ai >= winScore;
+                  }
+              } else {
+                  // 单机模式：player 是玩家
+                  isWin = scoreRef.current.player >= winScore;
+              }
+
+              setGameState(isWin ? 'win' : 'lose');
               SoundSys.sfx.win();
               slowMoFactor.current = 1.0;
               return;
